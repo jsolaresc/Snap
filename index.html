@@ -365,12 +365,34 @@
   }
 
   // ---------- sonido ----------
-  // Si en el repo existe "ruleta.mp3", se usa ese archivo; si no, se sintetiza el sonido.
+  // ruleta.mp3 suena mientras gira la bola (si no carga, se sintetiza el sonido).
+  // success.mp3 suena al mostrar el nombre.
   const audioFile = new Audio('ruleta.mp3');
-  let useFile = false;
+  let useFile = true;
   audioFile.preload = 'auto';
-  audioFile.addEventListener('canplaythrough', () => { useFile = true; }, { once: true });
   audioFile.addEventListener('error', () => { useFile = false; });
+
+  const successAudio = new Audio('success.mp3');
+  successAudio.preload = 'auto';
+  let successUnlocked = false;
+  function unlockSuccess() {   // iOS/Safari solo deja reproducir audio iniciado por un toque
+    if (successUnlocked) return;
+    successUnlocked = true;
+    successAudio.muted = true;
+    const pr = successAudio.play();
+    if (pr && pr.then) pr.then(() => { successAudio.pause(); successAudio.muted = false; })
+                         .catch(() => { successAudio.muted = false; });
+    else { successAudio.pause(); successAudio.muted = false; }
+  }
+  function playSuccess() {
+    try {
+      successAudio.pause();
+      successAudio.muted = false;
+      successAudio.currentTime = 0;
+      const pr = successAudio.play();
+      if (pr && pr.catch) pr.catch(() => {});
+    } catch (e) {}
+  }
 
   let actx = null, noiseBuf = null, roll = null;
   function audio() {
@@ -387,7 +409,11 @@
   }
   function startRoll() {
     if (useFile) {
-      try { audioFile.currentTime = 0; audioFile.volume = 1; audioFile.play(); } catch (e) {}
+      try {
+        audioFile.currentTime = 0; audioFile.volume = 1;
+        const pr = audioFile.play();
+        if (pr && pr.catch) pr.catch(() => {});
+      } catch (e) {}
       return;
     }
     const a = audio(); if (!a) return;
@@ -449,13 +475,14 @@
   function spin() {
     if (spinning || remaining.length < 1) return;
     spinning = true;
+    unlockSuccess();
     updateUI();
 
     const n = remaining.length;
     // un punto al azar de la rueda: los espacios más angostos salen proporcionalmente menos
     const target = segmentAt(Math.random() * TAU);
     const L = layout();
-    const T = 6500 + Math.random() * 1500;
+    const T = 6700 + Math.random() * 300;   // coincide con la duración de ruleta.mp3
     const wStart = wheelAngle;
     const W = TAU * (2 + Math.random());              // la rueda gira en sentido horario
     const bStart = Math.random() * TAU;
@@ -528,6 +555,7 @@
   // ---------- resultado ----------
   function showResult() {
     stopFile();
+    playSuccess();
     const p = remaining[pendingResult];
     winnerEl.textContent = p.name;
     winnerEl.style.setProperty('--glow', COLORS[p.color] === COLORS.negro ? 'rgba(255,255,255,.35)' : COLORS[p.color]);
@@ -537,6 +565,7 @@
   function dismiss() {
     if (!overlay.classList.contains('show')) return;
     overlay.classList.remove('show');
+    successAudio.pause();
     if (pendingResult !== null && remaining.length > 1) {
       // mantener la rueda visualmente estable al quitar un segmento
       remaining.splice(pendingResult, 1);
