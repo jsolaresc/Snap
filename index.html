@@ -474,12 +474,53 @@
 
   // ---------- animación ----------
   const easeOutCubic = t => 1 - Math.pow(1 - t, 3);
-  const easeOutQuart = t => 1 - Math.pow(1 - t, 4);
   const mod = (a, m) => ((a % m) + m) % m;
 
   const TRACK_R = 0.845, POCKET_R = 0.745;
+
+  // Línea de tiempo sincronizada con ruleta.mp3 (segundos medidos sobre el audio)
+  const T_DESCEND = 5.45;   // la bola empieza a bajar de la pista
+  // golpes de la bola en el audio: rebotes grandes y luego el traqueteo dentro del bolsillo
+  const IMPACTS = [5.77, 5.83, 5.96, 6.05, 6.19, 6.24, 6.28, 6.31, 6.34, 6.37, 6.40];
+  const T_SETTLE = 6.44;    // queda quieta en el bolsillo
+  const T_END = 7.0;        // fin de la animación (la rueda se detiene)
+  const BIG_IMPACTS = 5;    // los primeros cinco son rebotes grandes
+
   let lastTs = performance.now();
   let spinState = null;
+
+  // velocidad relativa bola-rueda (rad/s) en el instante t
+  function relSpeed(t) {
+    const w0 = 16, w1 = 4;
+    if (t < IMPACTS[0]) return w1 + (w0 - w1) * Math.pow(1 - t / IMPACTS[0], 1.5);
+    if (t >= T_SETTLE) return 0;
+    let w = w1;
+    for (let i = 0; i < IMPACTS.length && IMPACTS[i] <= t; i++) w *= i < BIG_IMPACTS ? 0.55 : 0.8;
+    return w * Math.sqrt(1 - (t - IMPACTS[0]) / (T_SETTLE - IMPACTS[0]));
+  }
+
+  // radio de la bola (fracción de R) en el instante t
+  function ballRadius(t) {
+    if (t < T_DESCEND) return TRACK_R;
+    const firstR = 0.805;
+    if (t < IMPACTS[0]) {
+      const u = (t - T_DESCEND) / (IMPACTS[0] - T_DESCEND);
+      return TRACK_R - (TRACK_R - firstR) * u * u;   // cae acelerando hacia los trastes
+    }
+    if (t >= T_SETTLE) return POCKET_R;
+    const pts = IMPACTS.concat([T_SETTLE]);
+    const impactR = i => i >= BIG_IMPACTS - 1 ? POCKET_R
+      : firstR + (POCKET_R - firstR) * (i / (BIG_IMPACTS - 1));
+    for (let i = 0; i < pts.length - 1; i++) {
+      if (t < pts[i + 1]) {
+        const gap = pts[i + 1] - pts[i];
+        const u = (t - pts[i]) / gap;
+        const h = Math.min(0.045, 1.8 * gap * gap);  // altura del rebote según el tiempo en el aire
+        return impactR(i) + (impactR(i + 1) - impactR(i)) * u + h * 4 * u * (1 - u);
+      }
+    }
+    return POCKET_R;
+  }
 
   function spin() {
     if (spinning || remaining.length < 1) return;
@@ -487,62 +528,72 @@
     unlockSuccess();
     updateUI();
 
-    const n = remaining.length;
     // un punto al azar de la rueda: los espacios más angostos salen proporcionalmente menos
     const target = segmentAt(Math.random() * TAU);
     const L = layout();
-    const T = 6700 + Math.random() * 300;   // coincide con la duración de ruleta.mp3
-    const wStart = wheelAngle;
-    const W = TAU * (2 + Math.random());              // la rueda gira en sentido horario
-    const bStart = Math.random() * TAU;
     const offset = (Math.random() - 0.5) * L[target].size * 0.5;   // no siempre en el centro exacto
-    const finalBall = wStart + W + L[target].mid + offset;
-    const B = TAU * 6 + mod(bStart - finalBall, TAU);  // la bola gira en sentido contrario
 
-    spinState = { start: performance.now(), T, wStart, W, bStart, B, target,
-                  lastBounce: 0, lastRel: null, prevBall: bStart, prevNow: performance.now() };
+    // posición relativa de la bola integrada en el tiempo, terminando en el espacio elegido
+    const DT = 1 / 240, steps = Math.ceil(T_SETTLE / DT);
+    const rel = new Float32Array(steps + 1);
+    for (let i = 1; i <= steps; i++) rel[i] = rel[i - 1] + relSpeed((i - 0.5) * DT) * DT;
+    const travel = rel[steps];
+    const relEnd = L[target].mid + offset;
+    // la bola gira en sentido contrario a la rueda: el ángulo relativo disminuye
+    const relAt = t => {
+      const x = Math.min(steps, Math.max(0, t / DT));
+      const i = Math.floor(x), f = x - i;
+      const v = i >= steps ? rel[steps] : rel[i] + (rel[i + 1] - rel[i]) * f;
+      return relEnd + (travel - v);
+    };
+
+    spinState = {
+      start: performance.now(), lastT: 0, target, relAt,
+      wStart: wheelAngle, W: TAU * (2 + Math.random()),   // la rueda gira en sentido horario
+      nextImpact: 0, lastSeg: null,
+    };
     startRoll();
-    ball = { angle: bStart, r: TRACK_R };
+    ball = { angle: wheelAngle + relAt(0), r: TRACK_R };
+  }
+
+  // reloj de la animación: sigue al audio cuando está sonando
+  function spinClock(now) {
+    const s = spinState;
+    let t = (now - s.start) / 1000;
+    if (useFile && !audioFile.paused && !audioFile.ended && audioFile.currentTime > 0) {
+      t = audioFile.currentTime;
+    }
+    t = Math.max(s.lastT, t);
+    s.lastT = t;
+    return t;
   }
 
   function stepSpin(now) {
     const s = spinState;
-    const p = Math.min(1, (now - s.start) / s.T);
-    wheelAngle = s.wStart + s.W * easeOutCubic(p);
-    ball.angle = s.bStart - s.B * easeOutQuart(p);
+    const t = spinClock(now);
+    wheelAngle = s.wStart + s.W * easeOutCubic(Math.min(1, t / T_END));
+    ball.angle = wheelAngle + s.relAt(t);
+    ball.r = ballRadius(t);
 
-    // velocidad de la bola (rad/s) para el sonido
-    const dtS = Math.max(0.001, (now - s.prevNow) / 1000);
-    const speed = Math.min(1, Math.abs(ball.angle - s.prevBall) / dtS / 20);
-    s.prevBall = ball.angle; s.prevNow = now;
-
-    // radio: orbita por la pista, cae rebotando y se asienta en el bolsillo
-    if (p < 0.58) {
-      ball.r = TRACK_R;
-      setRoll(speed, 1);
-    } else if (p < 0.86) {
-      const q = (p - 0.58) / 0.28;
-      const base = POCKET_R + (TRACK_R - POCKET_R) * Math.pow(1 - q, 2);
-      const bounce = 0.035 * (1 - q) * Math.abs(Math.sin(q * Math.PI * 4.5));
-      ball.r = Math.min(TRACK_R, base + bounce);
-      setRoll(speed, Math.max(0, 1 - q * 1.6));
-      // golpe en cada rebote
-      const k = Math.floor(q * 4.5);
-      if (k > s.lastBounce) { s.lastBounce = k; click(0.9 * (1 - q) + 0.15, 0.8 + Math.random() * 0.3); }
-      // tic al pasar por los separadores dorados
-      if (remaining.length > 1 && ball.r < 0.8) {
-        const rel = segmentAt(mod(ball.angle - wheelAngle, TAU));
-        if (s.lastRel !== null && rel !== s.lastRel) click(0.35 * (1 - q) + 0.05, 1.2 + Math.random() * 0.3);
-        s.lastRel = rel;
-      }
+    // sonido sintetizado (solo si ruleta.mp3 no está disponible)
+    if (t < IMPACTS[0]) {
+      setRoll(Math.min(1, relSpeed(t) / 16 + 0.15), t < T_DESCEND ? 1 : 0.6);
     } else {
-      if (ball.r !== POCKET_R) { ball.r = POCKET_R; click(0.5, 0.75); stopRoll(); }
-      ball.r = POCKET_R;
+      stopRoll();
+    }
+    while (s.nextImpact < IMPACTS.length && t >= IMPACTS[s.nextImpact]) {
+      const big = s.nextImpact < BIG_IMPACTS;
+      click(big ? 0.9 - s.nextImpact * 0.12 : 0.25, big ? 0.8 + Math.random() * 0.2 : 1.1);
+      s.nextImpact++;
+    }
+    if (!useFile && remaining.length > 1 && t > IMPACTS[0] && t < T_SETTLE) {
+      const seg = segmentAt(mod(ball.angle - wheelAngle, TAU));
+      if (s.lastSeg !== null && seg !== s.lastSeg) click(0.3, 1.3 + Math.random() * 0.3);
+      s.lastSeg = seg;
     }
 
-    if (p >= 1) {
+    if (t >= T_END) {
       stopRoll();
-      setTimeout(stopFile, 400);
       spinState = null;
       pendingResult = s.target;
       setTimeout(showResult, 650);
