@@ -117,15 +117,6 @@
     text-shadow: 0 0 40px var(--glow, rgba(255,255,255,.4)), 0 6px 0 rgba(0,0,0,.35);
   }
   #overlay.show #winner { transform: scale(1); }
-  #chip {
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: .2em;
-    text-transform: uppercase;
-    padding: 8px 16px;
-    border-radius: 999px;
-    border: 1px solid rgba(255,255,255,.35);
-  }
   #hint { color: var(--muted); font-size: 14px; letter-spacing: .04em; }
 </style>
 </head>
@@ -139,7 +130,6 @@
   </div>
 
   <div id="overlay" role="dialog" aria-modal="true" aria-labelledby="winner">
-    <div id="chip">Salió</div>
     <div id="winner"></div>
     <div id="hint">Click en cualquier lado para continuar</div>
   </div>
@@ -164,7 +154,6 @@
   const statusEl = document.getElementById('status');
   const overlay = document.getElementById('overlay');
   const winnerEl = document.getElementById('winner');
-  const chipEl = document.getElementById('chip');
 
   const TAU = Math.PI * 2;
   let remaining = loadRemaining();
@@ -358,6 +347,79 @@
     ctx.stroke();
   }
 
+  // ---------- sonido ----------
+  // Si en el repo existe "ruleta.mp3", se usa ese archivo; si no, se sintetiza el sonido.
+  const audioFile = new Audio('ruleta.mp3');
+  let useFile = false;
+  audioFile.preload = 'auto';
+  audioFile.addEventListener('canplaythrough', () => { useFile = true; }, { once: true });
+  audioFile.addEventListener('error', () => { useFile = false; });
+
+  let actx = null, noiseBuf = null, roll = null;
+  function audio() {
+    if (!actx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      actx = new AC();
+      noiseBuf = actx.createBuffer(1, actx.sampleRate * 2, actx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    if (actx.state === 'suspended') actx.resume();
+    return actx;
+  }
+  function startRoll() {
+    if (useFile) {
+      try { audioFile.currentTime = 0; audioFile.volume = 1; audioFile.play(); } catch (e) {}
+      return;
+    }
+    const a = audio(); if (!a) return;
+    const src = a.createBufferSource();
+    src.buffer = noiseBuf; src.loop = true;
+    const bp = a.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.2; bp.frequency.value = 900;
+    const lp = a.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2500;
+    const g = a.createGain(); g.gain.value = 0;
+    src.connect(bp).connect(lp).connect(g).connect(a.destination);
+    src.start();
+    roll = { src, bp, g };
+  }
+  function setRoll(speed, vol) {   // speed y vol entre 0 y 1
+    if (!roll) return;
+    const t = actx.currentTime;
+    roll.bp.frequency.setTargetAtTime(250 + speed * 1100, t, 0.05);
+    roll.g.gain.setTargetAtTime(vol * (0.06 + speed * 0.22), t, 0.05);
+  }
+  function stopRoll() {
+    if (!roll) return;
+    const r = roll; roll = null;
+    r.g.gain.setTargetAtTime(0, actx.currentTime, 0.08);
+    setTimeout(() => { try { r.src.stop(); } catch (e) {} }, 600);
+  }
+  function stopFile() {
+    if (!useFile || audioFile.paused) return;
+    const fade = setInterval(() => {
+      audioFile.volume = Math.max(0, audioFile.volume - 0.1);
+      if (audioFile.volume <= 0) { clearInterval(fade); audioFile.pause(); }
+    }, 40);
+  }
+  function click(vol, pitch = 1) {   // golpe de la bola contra madera/metal
+    if (useFile || !actx || vol <= 0.01) return;
+    const t = actx.currentTime;
+    const src = actx.createBufferSource(); src.buffer = noiseBuf;
+    const hp = actx.createBiquadFilter(); hp.type = 'bandpass'; hp.frequency.value = 2600 * pitch; hp.Q.value = 3;
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.9 * vol, t + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.045);
+    src.connect(hp).connect(g).connect(actx.destination);
+    src.start(t, Math.random()); src.stop(t + 0.06);
+    const o = actx.createOscillator(); o.type = 'triangle'; o.frequency.value = 1500 * pitch;
+    const og = actx.createGain();
+    og.gain.setValueAtTime(0.35 * vol, t);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
+    o.connect(og).connect(actx.destination); o.start(t); o.stop(t + 0.04);
+  }
+
   // ---------- animación ----------
   const easeOutCubic = t => 1 - Math.pow(1 - t, 3);
   const easeOutQuart = t => 1 - Math.pow(1 - t, 4);
@@ -368,7 +430,7 @@
   let spinState = null;
 
   function spin() {
-    if (spinning || remaining.length < 2) return;
+    if (spinning || remaining.length < 1) return;
     spinning = true;
     updateUI();
 
@@ -383,7 +445,9 @@
     const finalBall = wStart + W + target * seg + seg / 2 + offset;
     const B = TAU * 6 + mod(bStart - finalBall, TAU);  // la bola gira en sentido contrario
 
-    spinState = { start: performance.now(), T, wStart, W, bStart, B, target };
+    spinState = { start: performance.now(), T, wStart, W, bStart, B, target,
+                  lastBounce: 0, lastRel: null, prevBall: bStart, prevNow: performance.now() };
+    startRoll();
     ball = { angle: bStart, r: TRACK_R };
   }
 
@@ -393,19 +457,39 @@
     wheelAngle = s.wStart + s.W * easeOutCubic(p);
     ball.angle = s.bStart - s.B * easeOutQuart(p);
 
+    // velocidad de la bola (rad/s) para el sonido
+    const dtS = Math.max(0.001, (now - s.prevNow) / 1000);
+    const speed = Math.min(1, Math.abs(ball.angle - s.prevBall) / dtS / 20);
+    s.prevBall = ball.angle; s.prevNow = now;
+
     // radio: orbita por la pista, cae rebotando y se asienta en el bolsillo
     if (p < 0.58) {
       ball.r = TRACK_R;
+      setRoll(speed, 1);
     } else if (p < 0.86) {
       const q = (p - 0.58) / 0.28;
       const base = POCKET_R + (TRACK_R - POCKET_R) * Math.pow(1 - q, 2);
       const bounce = 0.035 * (1 - q) * Math.abs(Math.sin(q * Math.PI * 4.5));
       ball.r = Math.min(TRACK_R, base + bounce);
+      setRoll(speed, Math.max(0, 1 - q * 1.6));
+      // golpe en cada rebote
+      const k = Math.floor(q * 4.5);
+      if (k > s.lastBounce) { s.lastBounce = k; click(0.9 * (1 - q) + 0.15, 0.8 + Math.random() * 0.3); }
+      // tic al pasar por los separadores dorados
+      if (remaining.length > 1 && ball.r < 0.8) {
+        const seg = TAU / remaining.length;
+        const rel = Math.floor(mod(ball.angle - wheelAngle, TAU) / seg);
+        if (s.lastRel !== null && rel !== s.lastRel) click(0.35 * (1 - q) + 0.05, 1.2 + Math.random() * 0.3);
+        s.lastRel = rel;
+      }
     } else {
+      if (ball.r !== POCKET_R) { ball.r = POCKET_R; click(0.5, 0.75); stopRoll(); }
       ball.r = POCKET_R;
     }
 
     if (p >= 1) {
+      stopRoll();
+      setTimeout(stopFile, 400);
       spinState = null;
       pendingResult = s.target;
       setTimeout(showResult, 650);
@@ -426,23 +510,23 @@
 
   // ---------- resultado ----------
   function showResult() {
+    stopFile();
     const p = remaining[pendingResult];
     winnerEl.textContent = p.name;
     winnerEl.style.setProperty('--glow', COLORS[p.color] === COLORS.negro ? 'rgba(255,255,255,.35)' : COLORS[p.color]);
-    chipEl.textContent = `Salió · ${p.color}`;
-    chipEl.style.background = COLORS[p.color];
     overlay.classList.add('show');
   }
 
   function dismiss() {
     if (!overlay.classList.contains('show')) return;
     overlay.classList.remove('show');
-    if (pendingResult !== null) {
+    if (pendingResult !== null && remaining.length > 1) {
       // mantener la rueda visualmente estable al quitar un segmento
       remaining.splice(pendingResult, 1);
       pendingResult = null;
       saveRemaining();
     }
+    pendingResult = null;
     ball = null;
     spinning = false;
     updateUI();
@@ -458,7 +542,7 @@
   }
 
   function updateUI() {
-    spinBtn.disabled = spinning || remaining.length < 2;
+    spinBtn.disabled = spinning;
     resetBtn.disabled = spinning;
     if (remaining.length === 1) {
       statusEl.innerHTML = `Quedó solo <strong>${remaining[0].name}</strong>`;
