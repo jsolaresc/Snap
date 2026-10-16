@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ruleta</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Playfair+Display:wght@700;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --felt: #0c3b26;
+    --felt-dark: #06200f;
+    --gold: #d8b25a;
+    --gold-soft: #f1d999;
+    --text: #f4efe2;
+    --muted: rgba(244, 239, 226, .62);
+    --red: #b3121f;
+    --black: #141414;
+    --green: #0f7a3a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: radial-gradient(ellipse at 50% 35%, #145a3a 0%, var(--felt) 45%, var(--felt-dark) 100%);
+    color: var(--text);
+    font-family: "DM Sans", system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(14px, 3vh, 28px);
+    padding: 20px 16px;
+    overflow-x: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  h1 {
+    font-family: "Playfair Display", serif;
+    font-weight: 900;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    font-size: clamp(22px, 4vw, 34px);
+    color: var(--gold-soft);
+    text-shadow: 0 2px 0 rgba(0,0,0,.35);
+  }
+  #stage {
+    width: min(86vw, 68vh, 620px);
+    aspect-ratio: 1;
+    position: relative;
+  }
+  canvas { width: 100%; height: 100%; display: block; }
+  #status {
+    min-height: 1.4em;
+    font-size: clamp(14px, 2.2vw, 17px);
+    color: var(--muted);
+    text-align: center;
+  }
+  #status strong { color: var(--gold-soft); font-weight: 700; }
+  .controls { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  button {
+    font: 700 15px/1 "DM Sans", system-ui, sans-serif;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    padding: 15px 26px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: transform .12s ease, filter .15s ease, opacity .2s ease;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button:focus-visible { outline: 2px solid var(--gold-soft); outline-offset: 3px; }
+  #spin {
+    background: linear-gradient(180deg, #f0d48a, #c99a3c);
+    color: #2a1d05;
+    box-shadow: 0 6px 18px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.5);
+  }
+  #reset {
+    background: transparent;
+    color: var(--text);
+    border-color: rgba(244,239,226,.35);
+  }
+
+  /* Overlay con el nombre */
+  #overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 22px;
+    padding: 24px 16px;
+    background: rgba(4, 12, 8, .62);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .35s ease;
+    cursor: pointer;
+    z-index: 10;
+  }
+  #overlay.show { opacity: 1; pointer-events: auto; }
+  #winner {
+    font-family: "Playfair Display", serif;
+    font-weight: 900;
+    font-size: clamp(64px, 17vw, 200px);
+    line-height: 1;
+    text-align: center;
+    word-break: break-word;
+    color: #fff;
+    transform: scale(.7);
+    transition: transform .5s cubic-bezier(.2, 1.4, .4, 1);
+    text-shadow: 0 0 40px var(--glow, rgba(255,255,255,.4)), 0 6px 0 rgba(0,0,0,.35);
+  }
+  #overlay.show #winner { transform: scale(1); }
+  #chip {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    padding: 8px 16px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.35);
+  }
+  #hint { color: var(--muted); font-size: 14px; letter-spacing: .04em; }
+</style>
+</head>
+<body>
+  <h1>Ruleta</h1>
+  <div id="stage"><canvas id="wheel" aria-label="Ruleta de nombres" role="img"></canvas></div>
+  <p id="status" aria-live="polite"></p>
+  <div class="controls">
+    <button id="spin" type="button">Tirar bola</button>
+    <button id="reset" type="button">Resetear ruleta</button>
+  </div>
+
+  <div id="overlay" role="dialog" aria-modal="true" aria-labelledby="winner">
+    <div id="chip">Salió</div>
+    <div id="winner"></div>
+    <div id="hint">Click en cualquier lado para continuar</div>
+  </div>
+
+<script>
+(() => {
+  const COLORS = { negro: '#141414', rojo: '#b3121f', verde: '#0f7a3a' };
+  const ALL = [
+    { name: 'David',    color: 'negro' },
+    { name: 'Baltazar', color: 'rojo'  },
+    { name: 'Joaco',    color: 'verde' },
+    { name: 'Geno',     color: 'rojo'  },
+    { name: 'Mike',     color: 'negro' },
+    { name: 'Wilson',   color: 'rojo'  },
+  ];
+  const STORE_KEY = 'ruleta-restantes-v1';
+
+  const canvas = document.getElementById('wheel');
+  const ctx = canvas.getContext('2d');
+  const spinBtn = document.getElementById('spin');
+  const resetBtn = document.getElementById('reset');
+  const statusEl = document.getElementById('status');
+  const overlay = document.getElementById('overlay');
+  const winnerEl = document.getElementById('winner');
+  const chipEl = document.getElementById('chip');
+
+  const TAU = Math.PI * 2;
+  let remaining = loadRemaining();
+  let wheelAngle = 0;
+  let ball = null;            // { angle (mundo), r (fracción de R) } o null
+  let spinning = false;
+  let pendingResult = null;   // índice del nombre que salió
+  let size = 0, dpr = 1;
+
+  // ---------- persistencia ----------
+  function loadRemaining() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORE_KEY));
+      if (Array.isArray(saved) && saved.length) {
+        const list = ALL.filter(p => saved.includes(p.name));
+        if (list.length) return list;
+      }
+    } catch (e) {}
+    return ALL.slice();
+  }
+  function saveRemaining() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(remaining.map(p => p.name))); } catch (e) {}
+  }
+
+  // ---------- tamaño ----------
+  function resize() {
+    const rect = canvas.getBoundingClientRect();
+    dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    size = rect.width;
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.width * dpr);
+    draw();
+  }
+
+  // ---------- dibujo ----------
+  function draw() {
+    const W = canvas.width;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, W, W);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const c = size / 2;
+    const R = size / 2 * 0.97;
+    ctx.save();
+    ctx.translate(c, c);
+
+    // sombra exterior
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,.55)';
+    ctx.shadowBlur = R * 0.08;
+    ctx.shadowOffsetY = R * 0.03;
+    circle(R, '#3b200f');
+    ctx.restore();
+
+    // aro de madera
+    const wood = ctx.createRadialGradient(0, 0, R * 0.8, 0, 0, R);
+    wood.addColorStop(0, '#5a3016');
+    wood.addColorStop(0.55, '#7a4420');
+    wood.addColorStop(1, '#3a1d0b');
+    circle(R, wood);
+    ring(R * 0.995, 2, 'rgba(241,217,153,.55)');
+
+    // pista de la bola
+    const track = ctx.createRadialGradient(0, 0, R * 0.78, 0, 0, R * 0.9);
+    track.addColorStop(0, '#2c1608');
+    track.addColorStop(0.5, '#6b3c1c');
+    track.addColorStop(1, '#2c1608');
+    circle(R * 0.9, track);
+    ring(R * 0.9, 1.5, 'rgba(241,217,153,.45)');
+
+    // ---- parte que gira ----
+    ctx.save();
+    ctx.rotate(wheelAngle);
+    const n = remaining.length;
+    const seg = TAU / n;
+    const rOuter = R * 0.8, rInner = R * 0.38, rFret = R * 0.69;
+
+    for (let i = 0; i < n; i++) {
+      const a0 = i * seg, a1 = a0 + seg;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, rOuter, a0, a1);
+      ctx.closePath();
+      ctx.fillStyle = COLORS[remaining[i].color];
+      ctx.fill();
+    }
+    // brillo sobre los segmentos
+    const sheen = ctx.createRadialGradient(0, 0, rInner, 0, 0, rOuter);
+    sheen.addColorStop(0, 'rgba(255,255,255,0)');
+    sheen.addColorStop(0.75, 'rgba(255,255,255,.05)');
+    sheen.addColorStop(1, 'rgba(0,0,0,.25)');
+    circle(rOuter, sheen);
+
+    // separadores dorados (trastes de los bolsillos)
+    ctx.strokeStyle = '#d8b25a';
+    ctx.lineCap = 'round';
+    for (let i = 0; i < n && n > 1; i++) {
+      const a = i * seg;
+      ctx.lineWidth = Math.max(2, R * 0.012);
+      line(a, rFret, rOuter);
+      ctx.lineWidth = Math.max(1, R * 0.004);
+      ctx.strokeStyle = 'rgba(216,178,90,.6)';
+      line(a, rInner, rFret);
+      ctx.strokeStyle = '#d8b25a';
+    }
+    ring(rOuter, Math.max(2, R * 0.012), '#d8b25a');
+    ring(rFret, Math.max(1, R * 0.006), 'rgba(216,178,90,.85)');
+
+    // nombres
+    const fontPx = R * 0.082;
+    for (let i = 0; i < n; i++) {
+      const mid = i * seg + seg / 2;
+      ctx.save();
+      ctx.rotate(mid);
+      ctx.fillStyle = '#f4efe2';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      let fs = fontPx;
+      ctx.font = `700 ${fs}px "DM Sans", system-ui, sans-serif`;
+      const maxW = (rFret - rInner) * 0.88;
+      const w = ctx.measureText(remaining[i].name).width;
+      if (w > maxW) { fs *= maxW / w; ctx.font = `700 ${fs}px "DM Sans", system-ui, sans-serif`; }
+      ctx.shadowColor = 'rgba(0,0,0,.5)';
+      ctx.shadowBlur = 4;
+      ctx.fillText(remaining[i].name, (rInner + rFret) / 2, 0);
+      ctx.restore();
+    }
+
+    // cono central
+    const cone = ctx.createRadialGradient(-rInner * 0.3, -rInner * 0.3, rInner * 0.05, 0, 0, rInner);
+    cone.addColorStop(0, '#8a5328');
+    cone.addColorStop(0.6, '#5a3016');
+    cone.addColorStop(1, '#2e1607');
+    circle(rInner, cone);
+    ring(rInner, Math.max(2, R * 0.01), '#d8b25a');
+
+    // torreta dorada
+    const goldG = ctx.createLinearGradient(-R * 0.2, -R * 0.2, R * 0.2, R * 0.2);
+    goldG.addColorStop(0, '#fbe7b0');
+    goldG.addColorStop(0.5, '#d8b25a');
+    goldG.addColorStop(1, '#8c6a25');
+    ctx.fillStyle = goldG;
+    for (let k = 0; k < 4; k++) {
+      ctx.save();
+      ctx.rotate(k * TAU / 4);
+      ctx.beginPath();
+      ctx.moveTo(0, -R * 0.025);
+      ctx.lineTo(R * 0.26, -R * 0.008);
+      ctx.arc(R * 0.27, 0, R * 0.02, -Math.PI / 2, Math.PI / 2);
+      ctx.lineTo(0, R * 0.025);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+    circle(R * 0.07, goldG);
+    circle(R * 0.035, '#fbe7b0');
+    ctx.restore();
+    // ---- fin parte que gira ----
+
+    // bola
+    if (ball) {
+      const br = R * 0.034;
+      const bx = Math.cos(ball.angle) * ball.r * R;
+      const by = Math.sin(ball.angle) * ball.r * R;
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,.6)';
+      ctx.shadowBlur = br * 0.9;
+      ctx.shadowOffsetY = br * 0.35;
+      const bg = ctx.createRadialGradient(bx - br * 0.35, by - br * 0.4, br * 0.1, bx, by, br);
+      bg.addColorStop(0, '#ffffff');
+      bg.addColorStop(0.55, '#e9e6df');
+      bg.addColorStop(1, '#9d988c');
+      ctx.fillStyle = bg;
+      ctx.beginPath();
+      ctx.arc(bx, by, br, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  function circle(r, fill) {
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fillStyle = fill; ctx.fill();
+  }
+  function ring(r, w, stroke) {
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.lineWidth = w; ctx.strokeStyle = stroke; ctx.stroke();
+  }
+  function line(a, r0, r1) {
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * r0, Math.sin(a) * r0);
+    ctx.lineTo(Math.cos(a) * r1, Math.sin(a) * r1);
+    ctx.stroke();
+  }
+
+  // ---------- animación ----------
+  const easeOutCubic = t => 1 - Math.pow(1 - t, 3);
+  const easeOutQuart = t => 1 - Math.pow(1 - t, 4);
+  const mod = (a, m) => ((a % m) + m) % m;
+
+  const TRACK_R = 0.845, POCKET_R = 0.745;
+  let lastTs = performance.now();
+  let spinState = null;
+
+  function spin() {
+    if (spinning || remaining.length < 2) return;
+    spinning = true;
+    updateUI();
+
+    const n = remaining.length;
+    const seg = TAU / n;
+    const target = Math.floor(Math.random() * n);
+    const T = 6500 + Math.random() * 1500;
+    const wStart = wheelAngle;
+    const W = TAU * (2 + Math.random());              // la rueda gira en sentido horario
+    const bStart = Math.random() * TAU;
+    const offset = (Math.random() - 0.5) * seg * 0.5;   // no siempre en el centro exacto
+    const finalBall = wStart + W + target * seg + seg / 2 + offset;
+    const B = TAU * 6 + mod(bStart - finalBall, TAU);  // la bola gira en sentido contrario
+
+    spinState = { start: performance.now(), T, wStart, W, bStart, B, target };
+    ball = { angle: bStart, r: TRACK_R };
+  }
+
+  function stepSpin(now) {
+    const s = spinState;
+    const p = Math.min(1, (now - s.start) / s.T);
+    wheelAngle = s.wStart + s.W * easeOutCubic(p);
+    ball.angle = s.bStart - s.B * easeOutQuart(p);
+
+    // radio: orbita por la pista, cae rebotando y se asienta en el bolsillo
+    if (p < 0.58) {
+      ball.r = TRACK_R;
+    } else if (p < 0.86) {
+      const q = (p - 0.58) / 0.28;
+      const base = POCKET_R + (TRACK_R - POCKET_R) * Math.pow(1 - q, 2);
+      const bounce = 0.035 * (1 - q) * Math.abs(Math.sin(q * Math.PI * 4.5));
+      ball.r = Math.min(TRACK_R, base + bounce);
+    } else {
+      ball.r = POCKET_R;
+    }
+
+    if (p >= 1) {
+      spinState = null;
+      pendingResult = s.target;
+      setTimeout(showResult, 650);
+    }
+  }
+
+  function loop(now) {
+    const dt = Math.min(0.05, (now - lastTs) / 1000);
+    lastTs = now;
+    if (spinState) {
+      stepSpin(now);
+    } else if (!spinning && !ball) {
+      wheelAngle += dt * 0.12;  // giro lento en reposo
+    }
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- resultado ----------
+  function showResult() {
+    const p = remaining[pendingResult];
+    winnerEl.textContent = p.name;
+    winnerEl.style.setProperty('--glow', COLORS[p.color] === COLORS.negro ? 'rgba(255,255,255,.35)' : COLORS[p.color]);
+    chipEl.textContent = `Salió · ${p.color}`;
+    chipEl.style.background = COLORS[p.color];
+    overlay.classList.add('show');
+  }
+
+  function dismiss() {
+    if (!overlay.classList.contains('show')) return;
+    overlay.classList.remove('show');
+    if (pendingResult !== null) {
+      // mantener la rueda visualmente estable al quitar un segmento
+      remaining.splice(pendingResult, 1);
+      pendingResult = null;
+      saveRemaining();
+    }
+    ball = null;
+    spinning = false;
+    updateUI();
+  }
+
+  function reset() {
+    if (spinning) return;
+    remaining = ALL.slice();
+    ball = null;
+    pendingResult = null;
+    saveRemaining();
+    updateUI();
+  }
+
+  function updateUI() {
+    spinBtn.disabled = spinning || remaining.length < 2;
+    resetBtn.disabled = spinning;
+    if (remaining.length === 1) {
+      statusEl.innerHTML = `Quedó solo <strong>${remaining[0].name}</strong>`;
+    } else if (spinning) {
+      statusEl.textContent = 'No va más…';
+    } else {
+      statusEl.textContent = `Quedan ${remaining.length} nombres`;
+    }
+  }
+
+  spinBtn.addEventListener('click', spin);
+  resetBtn.addEventListener('click', reset);
+  overlay.addEventListener('click', dismiss);
+  document.addEventListener('keydown', e => {
+    if (overlay.classList.contains('show') && (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape')) {
+      e.preventDefault();
+      dismiss();
+    }
+  });
+  window.addEventListener('resize', resize);
+
+  updateUI();
+  resize();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
