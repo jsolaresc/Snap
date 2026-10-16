@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ruleta</title>
+<title>Snap Roulette</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Playfair+Display:wght@700;900&display=swap" rel="stylesheet">
@@ -44,7 +44,13 @@
     font-size: clamp(22px, 4vw, 34px);
     color: var(--gold-soft);
     text-shadow: 0 2px 0 rgba(0,0,0,.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: .5em;
+    text-align: center;
   }
+  #logo { height: 1.4em; width: auto; flex: none; filter: drop-shadow(0 2px 0 rgba(0,0,0,.35)); }
   #stage {
     width: min(86vw, 68vh, 620px);
     aspect-ratio: 1;
@@ -121,7 +127,10 @@
 </style>
 </head>
 <body>
-  <h1>Ruleta</h1>
+  <h1>
+    <img id="logo" src="snap-logo.svg" alt="" onerror="if(!this.dataset.png){this.dataset.png=1;this.src='snap-logo.png'}else{this.remove()}">
+    <span>Snap Roulette</span>
+  </h1>
   <div id="stage"><canvas id="wheel" aria-label="Ruleta de nombres" role="img"></canvas></div>
   <p id="status" aria-live="polite"></p>
   <div class="controls">
