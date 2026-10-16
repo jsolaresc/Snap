@@ -140,7 +140,7 @@
   const ALL = [
     { name: 'David',    color: 'negro' },
     { name: 'Baltazar', color: 'rojo'  },
-    { name: 'Joaco',    color: 'verde' },
+    { name: 'Joaco',    color: 'verde', width: 0.8 },  // 20% más angosto
     { name: 'Geno',     color: 'rojo'  },
     { name: 'Mike',     color: 'negro' },
     { name: 'Wilson',   color: 'rojo'  },
@@ -156,6 +156,23 @@
   const winnerEl = document.getElementById('winner');
 
   const TAU = Math.PI * 2;
+
+  // ángulo de inicio y tamaño de cada espacio según su ancho relativo
+  function layout() {
+    const total = remaining.reduce((t, p) => t + (p.width || 1), 0);
+    let a = 0;
+    return remaining.map(p => {
+      const size = TAU * (p.width || 1) / total;
+      const out = { start: a, size, mid: a + size / 2 };
+      a += size;
+      return out;
+    });
+  }
+  function segmentAt(angle) {   // ángulo relativo a la rueda -> índice
+    const L = layout();
+    for (let i = 0; i < L.length; i++) if (angle < L[i].start + L[i].size) return i;
+    return L.length - 1;
+  }
   let remaining = loadRemaining();
   let wheelAngle = 0;
   let ball = null;            // { angle (mundo), r (fracción de R) } o null
@@ -227,11 +244,11 @@
     ctx.save();
     ctx.rotate(wheelAngle);
     const n = remaining.length;
-    const seg = TAU / n;
+    const L = layout();
     const rOuter = R * 0.8, rInner = R * 0.38, rFret = R * 0.69;
 
     for (let i = 0; i < n; i++) {
-      const a0 = i * seg, a1 = a0 + seg;
+      const a0 = L[i].start, a1 = a0 + L[i].size;
       ctx.beginPath();
       ctx.moveTo(0, 0);
       ctx.arc(0, 0, rOuter, a0, a1);
@@ -250,7 +267,7 @@
     ctx.strokeStyle = '#d8b25a';
     ctx.lineCap = 'round';
     for (let i = 0; i < n && n > 1; i++) {
-      const a = i * seg;
+      const a = L[i].start;
       ctx.lineWidth = Math.max(2, R * 0.012);
       line(a, rFret, rOuter);
       ctx.lineWidth = Math.max(1, R * 0.004);
@@ -264,7 +281,7 @@
     // nombres
     const fontPx = R * 0.082;
     for (let i = 0; i < n; i++) {
-      const mid = i * seg + seg / 2;
+      const mid = L[i].mid;
       ctx.save();
       ctx.rotate(mid);
       ctx.fillStyle = '#f4efe2';
@@ -435,14 +452,15 @@
     updateUI();
 
     const n = remaining.length;
-    const seg = TAU / n;
-    const target = Math.floor(Math.random() * n);
+    // un punto al azar de la rueda: los espacios más angostos salen proporcionalmente menos
+    const target = segmentAt(Math.random() * TAU);
+    const L = layout();
     const T = 6500 + Math.random() * 1500;
     const wStart = wheelAngle;
     const W = TAU * (2 + Math.random());              // la rueda gira en sentido horario
     const bStart = Math.random() * TAU;
-    const offset = (Math.random() - 0.5) * seg * 0.5;   // no siempre en el centro exacto
-    const finalBall = wStart + W + target * seg + seg / 2 + offset;
+    const offset = (Math.random() - 0.5) * L[target].size * 0.5;   // no siempre en el centro exacto
+    const finalBall = wStart + W + L[target].mid + offset;
     const B = TAU * 6 + mod(bStart - finalBall, TAU);  // la bola gira en sentido contrario
 
     spinState = { start: performance.now(), T, wStart, W, bStart, B, target,
@@ -477,8 +495,7 @@
       if (k > s.lastBounce) { s.lastBounce = k; click(0.9 * (1 - q) + 0.15, 0.8 + Math.random() * 0.3); }
       // tic al pasar por los separadores dorados
       if (remaining.length > 1 && ball.r < 0.8) {
-        const seg = TAU / remaining.length;
-        const rel = Math.floor(mod(ball.angle - wheelAngle, TAU) / seg);
+        const rel = segmentAt(mod(ball.angle - wheelAngle, TAU));
         if (s.lastRel !== null && rel !== s.lastRel) click(0.35 * (1 - q) + 0.05, 1.2 + Math.random() * 0.3);
         s.lastRel = rel;
       }
