@@ -91,6 +91,7 @@
   }
 
   /* Overlay con el nombre */
+  #fx { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; }
   #overlay {
     position: fixed;
     inset: 0;
@@ -132,6 +133,7 @@
     <span>Snap Roulette</span>
   </h1>
   <div id="stage"><canvas id="wheel" aria-label="Ruleta de nombres" role="img"></canvas></div>
+  <canvas id="fx" aria-hidden="true"></canvas>
   <p id="status" aria-live="polite"></p>
   <div class="controls">
     <button id="spin" type="button">Tirar bola</button>
@@ -165,6 +167,8 @@
   const winnerEl = document.getElementById('winner');
 
   const TAU = Math.PI * 2;
+  const LAST_STANDING = 'Geno';   // siempre queda último; con él solo, la bola sale volando
+  let escaped = false;            // la bola ya salió volando
 
   // ángulo de inicio y tamaño de cada espacio según su ancho relativo
   function layout() {
@@ -523,13 +527,18 @@
   }
 
   function spin() {
-    if (spinning || remaining.length < 1) return;
+    if (spinning || escaped || remaining.length < 1) return;
     spinning = true;
     unlockSuccess();
     updateUI();
 
     // un punto al azar de la rueda: los espacios más angostos salen proporcionalmente menos
-    const target = segmentAt(Math.random() * TAU);
+    const onlyLast = remaining.length === 1 && remaining[0].name === LAST_STANDING;
+    let target = 0;
+    if (!onlyLast) {
+      do { target = segmentAt(Math.random() * TAU); }
+      while (remaining[target].name === LAST_STANDING);
+    }
     const L = layout();
     const offset = (Math.random() - 0.5) * L[target].size * 0.5;   // no siempre en el centro exacto
 
@@ -550,7 +559,7 @@
     spinState = {
       start: performance.now(), lastT: 0, target, relAt,
       wStart: wheelAngle, W: TAU * (2 + Math.random()),   // la rueda gira en sentido horario
-      nextImpact: 0, lastSeg: null,
+      nextImpact: 0, lastSeg: null, escape: onlyLast,
     };
     startRoll();
     ball = { angle: wheelAngle + relAt(0), r: TRACK_R };
@@ -574,6 +583,11 @@
     wheelAngle = s.wStart + s.W * easeOutCubic(Math.min(1, t / T_END));
     ball.angle = wheelAngle + s.relAt(t);
     ball.r = ballRadius(t);
+
+    if (s.escape && t >= IMPACTS[0]) {   // golpea el traste y sale despedida
+      launchBall(s);
+      return;
+    }
 
     // sonido sintetizado (solo si ruleta.mp3 no está disponible)
     if (t < IMPACTS[0]) {
@@ -612,6 +626,69 @@
     requestAnimationFrame(loop);
   }
 
+  // ---------- la bola sale volando ----------
+  const fx = document.getElementById('fx');
+  const fctx = fx.getContext('2d');
+  function sizeFx() {
+    const d = Math.min(window.devicePixelRatio || 1, 2.5);
+    fx.width = Math.round(innerWidth * d);
+    fx.height = Math.round(innerHeight * d);
+    fctx.setTransform(d, 0, 0, d, 0, 0);
+  }
+  function launchBall(s) {
+    spinState = null;
+    stopRoll();
+    click(1, 0.7);
+    setTimeout(stopFile, 120);
+
+    const rect = canvas.getBoundingClientRect();
+    const R = size / 2 * 0.97;
+    const a = ball.angle;
+    const x0 = rect.left + rect.width / 2 + Math.cos(a) * ball.r * R;
+    const y0 = rect.top + rect.height / 2 + Math.sin(a) * ball.r * R;
+    const br0 = R * 0.034;
+    // la bola viaja en sentido antihorario: tangente + empuje hacia afuera y hacia arriba
+    const tx = Math.sin(a), ty = -Math.cos(a), ox = Math.cos(a), oy = Math.sin(a);
+    const speed = Math.max(innerWidth, innerHeight) * 1.1;
+    const vx = (tx * 0.55 + ox * 0.85) * speed;
+    const vy = (ty * 0.55 + oy * 0.85) * speed - speed * 0.35;
+    const g = speed * 1.4;
+    ball = null;
+    sizeFx();
+
+    const t0 = performance.now();
+    function frame(now) {
+      const t = (now - t0) / 1000;
+      const k = 1 + t * 2.2;   // se acerca a la cámara
+      const x = x0 + vx * t;
+      const y = y0 + vy * t + 0.5 * g * t * t;
+      const br = br0 * k * k;
+      fctx.clearRect(0, 0, innerWidth, innerHeight);
+      const off = x + br < 0 || x - br > innerWidth || y - br > innerHeight || y + br < 0;
+      if (off || t > 2.5) {
+        escaped = true;
+        spinning = false;
+        updateUI();
+        return;
+      }
+      fctx.save();
+      fctx.shadowColor = 'rgba(0,0,0,.5)';
+      fctx.shadowBlur = br * 0.8;
+      fctx.shadowOffsetY = br * 0.4;
+      const bg = fctx.createRadialGradient(x - br * 0.35, y - br * 0.4, br * 0.1, x, y, br);
+      bg.addColorStop(0, '#ffffff');
+      bg.addColorStop(0.55, '#e9e6df');
+      bg.addColorStop(1, '#9d988c');
+      fctx.fillStyle = bg;
+      fctx.beginPath();
+      fctx.arc(x, y, br, 0, TAU);
+      fctx.fill();
+      fctx.restore();
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
   // ---------- resultado ----------
   function showResult() {
     stopFile();
@@ -641,6 +718,7 @@
   function reset() {
     if (spinning) return;
     remaining = ALL.slice();
+    escaped = false;
     ball = null;
     pendingResult = null;
     saveRemaining();
@@ -648,9 +726,11 @@
   }
 
   function updateUI() {
-    spinBtn.disabled = spinning;
+    spinBtn.disabled = spinning || escaped;
     resetBtn.disabled = spinning;
-    if (remaining.length === 1) {
+    if (escaped) {
+      statusEl.innerHTML = `¡La bola salió volando! <strong>${LAST_STANDING}</strong> se salva`;
+    } else if (remaining.length === 1) {
       statusEl.innerHTML = `Quedó solo <strong>${remaining[0].name}</strong>`;
     } else if (spinning) {
       statusEl.textContent = 'No va más…';
