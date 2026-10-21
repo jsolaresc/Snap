@@ -729,7 +729,7 @@
     spinBtn.disabled = spinning || escaped;
     resetBtn.disabled = spinning;
     if (escaped) {
-      statusEl.innerHTML = `¡La bola salió volando! <strong>${LAST_STANDING}</strong> se salva`;
+      statusEl.textContent = '¡La bola salió volando!';
     } else if (remaining.length === 1) {
       statusEl.innerHTML = `Quedó solo <strong>${remaining[0].name}</strong>`;
     } else if (spinning) {
